@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 
 # --- 定数 ---
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-COOLDOWN_MINUTES = 5 # クールダウン時間（分）
+COOLDOWN_MINUTES = 1440 # クールダウン時間（分）
 REPORT_BUTTON_CHANNEL_ID = 1399405974841852116  # ボタン式報告専用チャンネルID（変更したい場合はここを修正）
 WARNING_CHANNEL_ID = 1399405974841852116  # 警告発行時の報告先チャンネルID
 ADMIN_ONLY_CHANNEL_ID = 1388167902808637580  # 管理者のみ報告時のチャンネルID
@@ -71,7 +71,7 @@ async def setup_report_button():
         # 新しい報告ボタンメッセージのEmbed定義
         new_embed = discord.Embed(
             title="🛡️ 守護神ボット 報告システム",
-            description="サーバーのルール違反を管理者に報告できます。\n下のボタンをクリックして報告を開始してください。",
+            description="サーバーのルール違反を報告できます。\n下のボタンをクリックして報告を開始してください。",
             color=discord.Color.blue()
         )
         new_embed.add_field(
@@ -104,7 +104,7 @@ async def create_new_report_button(channel):
     """新しい報告ボタンメッセージを作成する"""
     embed = discord.Embed(
         title="🛡️ 守護神ボット 報告システム",
-        description="サーバーのルール違反を管理者に報告できます。\n下のボタンをクリックして報告を開始してください。",
+        description="サーバーのルール違反を報告できます。\n下のボタンをクリックして報告を開始してください。",
         color=discord.Color.blue()
     )
     embed.add_field(

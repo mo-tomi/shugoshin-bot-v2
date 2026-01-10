@@ -68,17 +68,32 @@ async def setup_report_button():
             logging.error(f"チャンネル '{channel.name}' にメッセージ送信権限がありません")
             return
             
-        # 既存のボタンメッセージを探す（新しいメッセージを無限に作らないように）
+        # 新しい報告ボタンメッセージのEmbed定義
+        new_embed = discord.Embed(
+            title="🛡️ 守護神ボット 報告システム",
+            description="サーバーのルール違反を管理者に報告できます。\n下のボタンをクリックして報告を開始してください。",
+            color=discord.Color.blue()
+        )
+        new_embed.add_field(
+            name="📋 報告の流れ", 
+            value="① 報告開始ボタンをクリック\n② 対象者を選択\n③ 違反ルールを選択\n④ 緊急度を選択\n⑤ 詳細情報を入力\n⑥ 最終確認・送信", 
+            inline=False
+        )
+        
+        view = ReportStartView()
+        # 既存のボタンメッセージを探す
         async for message in channel.history(limit=50):
             if message.author == client.user and message.embeds:
                 embed = message.embeds[0]
                 if embed.title and "報告システム" in embed.title:
-                    # 既存の報告ボタンメッセージがあるので、新しく作らない
-                    logging.info(f"既存の報告ボタンが見つかりました (メッセージID: {message.id})")
+                    # 既存のメッセージを見つけた場合、内容を更新する
+                    logging.info(f"既存の報告ボタンが見つかりました (メッセージID: {message.id})。内容を更新します。")
+                    await message.edit(embed=new_embed, view=view)
                     return
         
-        # 新しい報告ボタンメッセージを作成
-        await create_new_report_button(channel)
+        # 見つからなければ新しく送信
+        sent_message = await channel.send(embed=new_embed, view=view)
+        logging.info(f"報告用ボタンを設置しました (メッセージID: {sent_message.id})")
         
     except discord.Forbidden:
         logging.error(f"チャンネルID {REPORT_BUTTON_CHANNEL_ID} にメッセージを送信する権限がありません")
@@ -89,7 +104,7 @@ async def create_new_report_button(channel):
     """新しい報告ボタンメッセージを作成する"""
     embed = discord.Embed(
         title="🛡️ 守護神ボット 報告システム",
-        description="サーバーのルール違反を匿名で管理者に報告できます。\n下のボタンをクリックして報告を開始してください。",
+        description="サーバーのルール違反を管理者に報告できます。\n下のボタンをクリックして報告を開始してください。",
         color=discord.Color.blue()
     )
     embed.add_field(
@@ -97,7 +112,6 @@ async def create_new_report_button(channel):
         value="① 報告開始ボタンをクリック\n② 対象者を選択\n③ 違反ルールを選択\n④ 緊急度を選択\n⑤ 詳細情報を入力\n⑥ 最終確認・送信", 
         inline=False
     )
-    embed.set_footer(text="報告は完全に匿名で処理されます")
     
     view = ReportStartView()
     sent_message = await channel.send(embed=embed, view=view)
@@ -624,7 +638,7 @@ class DetailsInputModal(ui.Modal):
             embed.add_field(name="📝 詳細", value=self.report_data.details[:500] + ("..." if len(self.report_data.details) > 500 else ""), inline=False)
         if self.report_data.message_link:
             embed.add_field(name="🔗 証拠リンク", value=self.report_data.message_link, inline=False)
-        embed.set_footer(text="ステップ 5/5 | この報告は匿名で送信されます")
+        embed.set_footer(text="ステップ 5/5 | 報告者の名前は通知されます")
         
         await interaction.response.edit_message(embed=embed, view=view)
 
@@ -675,7 +689,8 @@ class FinalConfirmView(ui.View):
             # 報告種別を表示に追加
             report_type = "警告付き報告" if self.report_data.issue_warning else "管理者のみ報告"
             
-            embed = discord.Embed(title=f"{title_prefix} 新規の匿名報告 (ID: {report_id})", color=embed_color)
+            embed = discord.Embed(title=f"{title_prefix} 新規の報告 (ID: {report_id})", color=embed_color)
+            embed.add_field(name="🗣️ 報告者", value=f"{interaction.user.mention} ({interaction.user.id})", inline=False)
             embed.add_field(name="👤 報告対象者", value=f"{self.report_data.target_user.mention} ({self.report_data.target_user.id})", inline=False)
             embed.add_field(name="📜 違反したルール", value=self.report_data.violated_rule, inline=False)
             embed.add_field(name="🔥 緊急度", value=self.report_data.urgency, inline=False)
@@ -684,25 +699,34 @@ class FinalConfirmView(ui.View):
                 embed.add_field(name="📝 詳細", value=self.report_data.details, inline=False)
             if self.report_data.message_link: 
                 embed.add_field(name="🔗 関連メッセージ", value=self.report_data.message_link, inline=False)
-            embed.add_field(name="📊 ステータス", value="未対応", inline=False)
-            embed.set_footer(text="この報告は匿名で送信されました（ボタン式報告）")
+            embed.set_footer(text="この報告はボタン機能から送信されました")
 
             sent_message = await report_channel.send(content=content, embed=embed)
             await db.update_report_message_id(report_id, sent_message.id)
 
             # 警告を発行する場合（警告チャンネルでのみ実行）
             if self.report_data.issue_warning:
-                warning_message = (
-                    f"{self.report_data.target_user.mention}\n\n"
-                    f"⚠️ **サーバー管理者からのお知らせです** ⚠️\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"あなたの行動について、サーバーのルールに関する報告が寄せられました。\n\n"
-                    f"**該当ルール:** [✅ルール](<{RULE_ANNOUNCEMENT_LINK}>)\n\n"
-                    f"みんなが楽しく過ごせるよう、今一度ルールの確認をお願いいたします。\n"
-                    f"ご不明な点があれば、このチャンネルで返信するか、管理者にDMを送ってください。\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━"
+
+                # メンションはコンテンツとして送信（通知用）
+                mention_content = f"{self.report_data.target_user.mention}"
+                
+                # 警告内容はEmbedとして送信（リンクを綺麗に表示するため）
+                warning_embed = discord.Embed(
+                    title="⚠️ サーバー管理者からのお知らせです ⚠️",
+                    description=(
+                        "━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "あなたの行動について、サーバーのルールに関する報告が寄せられました。\n\n"
+                        f"**該当ルール:** {self.report_data.violated_rule}\n"
+                        f"**ルール詳細:** [✅ルールを確認する](https://discord.com/channels/1300291307314610316/1377465336076566578)\n\n"
+                        "みんなが楽しく過ごせるよう、今一度ルールの確認をお願いいたします。\n"
+                        "ご不明な点があれば、このチャンネルで返信するか、管理者にDMを送ってください。\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━"
+                    ),
+                    color=discord.Color.red()
+
                 )
-                await report_channel.send(warning_message)
+                
+                await report_channel.send(content=mention_content, embed=warning_embed)
 
             final_message = "✅ 報告を送信しました。ご協力ありがとうございます。"
             if self.report_data.issue_warning:
@@ -729,7 +753,7 @@ class FinalConfirmView(ui.View):
 # --- スラッシュコマンド ---
 
 # ★★★★★★★ 直接報告コマンド ★★★★★★★
-@tree.command(name="syugoshin", description="サーバーのルール違反を匿名で管理者に報告します。")
+@tree.command(name="syugoshin", description="サーバーのルール違反を管理者に報告します。")
 @app_commands.describe(
     user="① 報告したい相手を選んでね",
     rule="② 違反したルールを選んでね",
@@ -792,14 +816,14 @@ async def report(
                 role = interaction.guild.get_role(settings['urgent_role_id'])
                 if role: content = f"{role.mention} 緊急の報告です！"
         
-        embed = discord.Embed(title=f"{title_prefix} 新規の匿名報告 (ID: {report_id})", color=embed_color)
+        embed = discord.Embed(title=f"{title_prefix} 新規の報告 (ID: {report_id})", color=embed_color)
+        embed.add_field(name="🗣️ 報告者", value=f"{interaction.user.mention} ({interaction.user.id})", inline=False)
         embed.add_field(name="👤 報告対象者", value=f"{user.mention} ({user.id})", inline=False)
         embed.add_field(name="📜 違反したルール", value=rule.value, inline=False)
         embed.add_field(name="🔥 緊急度", value=speed.value, inline=False)
         if info: embed.add_field(name="📝 詳細", value=info, inline=False)
         if message_link: embed.add_field(name="🔗 関連メッセージ", value=message_link, inline=False)
-        embed.add_field(name="📊 ステータス", value="未対応", inline=False)
-        embed.set_footer(text="この報告は匿名で送信されました。")
+        embed.set_footer(text="この報告はスラッシュコマンドから送信されました。")
 
         sent_message = await report_channel.send(content=content, embed=embed)
         await db.update_report_message_id(report_id, sent_message.id)

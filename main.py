@@ -690,8 +690,8 @@ class FinalConfirmView(ui.View):
             report_type = "警告付き報告" if self.report_data.issue_warning else "管理者のみ報告"
             
             embed = discord.Embed(title=f"{title_prefix} 新規の報告 (ID: {report_id})", color=embed_color)
-            embed.add_field(name="🗣️ 報告者", value=f"{interaction.user.mention} ({interaction.user.id})", inline=False)
-            embed.add_field(name="👤 報告対象者", value=f"{self.report_data.target_user.mention} ({self.report_data.target_user.id})", inline=False)
+            embed.add_field(name="🗣️ 報告者", value=f"{interaction.user.mention}", inline=False)
+            embed.add_field(name="👤 報告対象者", value=f"{self.report_data.target_user.mention}", inline=False)
             embed.add_field(name="📜 違反したルール", value=self.report_data.violated_rule, inline=False)
             embed.add_field(name="🔥 緊急度", value=self.report_data.urgency, inline=False)
             embed.add_field(name="📋 報告種別", value=report_type, inline=False)
@@ -817,8 +817,8 @@ async def report(
                 if role: content = f"{role.mention} 緊急の報告です！"
         
         embed = discord.Embed(title=f"{title_prefix} 新規の報告 (ID: {report_id})", color=embed_color)
-        embed.add_field(name="🗣️ 報告者", value=f"{interaction.user.mention} ({interaction.user.id})", inline=False)
-        embed.add_field(name="👤 報告対象者", value=f"{user.mention} ({user.id})", inline=False)
+        embed.add_field(name="🗣️ 報告者", value=f"{interaction.user.mention}", inline=False)
+        embed.add_field(name="👤 報告対象者", value=f"{user.mention}", inline=False)
         embed.add_field(name="📜 違反したルール", value=rule.value, inline=False)
         embed.add_field(name="🔥 緊急度", value=speed.value, inline=False)
         if info: embed.add_field(name="📝 詳細", value=info, inline=False)

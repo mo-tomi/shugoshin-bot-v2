@@ -18,6 +18,7 @@ COOLDOWN_MINUTES = 1440 # クールダウン時間（分）
 REPORT_BUTTON_CHANNEL_ID = 1399405974841852116  # ボタン式報告専用チャンネルID（変更したい場合はここを修正）
 WARNING_CHANNEL_ID = 1399405974841852116  # 警告発行時の報告先チャンネルID
 ADMIN_ONLY_CHANNEL_ID = 1388167902808637580  # 管理者のみ報告時のチャンネルID
+PUBLIC_REPORT_CHANNEL_ID = 1399405974841852116  # 承認された報告を公開するチャンネルID（変更したい場合はここを修正）
 RULE_ANNOUNCEMENT_LINK = "https://discord.com/channels/1300291307314610316/1377465336076566578"  # ルールアナウンスチャンネルのリンク
 
 # --- Discord Botの準備 ---
@@ -71,12 +72,12 @@ async def setup_report_button():
         # 新しい報告ボタンメッセージのEmbed定義
         new_embed = discord.Embed(
             title="🛡️ 守護神ボット 報告システム",
-            description="サーバーのルール違反を報告できます。\n下のボタンをクリックして報告を開始してください。",
+            description="サーバーのルール違反を報告できます。\n下のボタンをクリックして報告を開始してください。\n\n⚠️ **テキストチャンネルでの違反のみ対象です。ボイスチャットは対象外です。**",
             color=discord.Color.blue()
         )
         new_embed.add_field(
-            name="📋 報告の流れ", 
-            value="① 報告開始ボタンをクリック\n② 対象者を選択\n③ 違反ルールを選択\n④ 緊急度を選択\n⑤ 詳細情報を入力\n⑥ 最終確認・送信", 
+            name="📋 報告の流れ",
+            value="① 報告開始ボタンをクリック\n② 対象者を選択\n③ 違反ルールを選択\n④ 緊急度を選択\n⑤ 詳細情報を入力\n⑥ 最終確認・送信",
             inline=False
         )
         
@@ -104,12 +105,12 @@ async def create_new_report_button(channel):
     """新しい報告ボタンメッセージを作成する"""
     embed = discord.Embed(
         title="🛡️ 守護神ボット 報告システム",
-        description="サーバーのルール違反を報告できます。\n下のボタンをクリックして報告を開始してください。",
+        description="サーバーのルール違反を報告できます。\n下のボタンをクリックして報告を開始してください。\n\n⚠️ **テキストチャンネルでの違反のみ対象です。ボイスチャットは対象外です。**",
         color=discord.Color.blue()
     )
     embed.add_field(
-        name="📋 報告の流れ", 
-        value="① 報告開始ボタンをクリック\n② 対象者を選択\n③ 違反ルールを選択\n④ 緊急度を選択\n⑤ 詳細情報を入力\n⑥ 最終確認・送信", 
+        name="📋 報告の流れ",
+        value="① 報告開始ボタンをクリック\n② 対象者を選択\n③ 違反ルールを選択\n④ 緊急度を選択\n⑤ 詳細情報を入力\n⑥ 最終確認・送信",
         inline=False
     )
     
@@ -701,7 +702,15 @@ class FinalConfirmView(ui.View):
                 embed.add_field(name="🔗 関連メッセージ", value=self.report_data.message_link, inline=False)
             embed.set_footer(text="この報告はボタン機能から送信されました")
 
-            sent_message = await report_channel.send(content=content, embed=embed)
+            # 承認ボタンを追加
+            approval_view = ApprovalView(
+                report_id=report_id,
+                report_embed=embed,
+                target_user_mention=self.report_data.target_user.mention,
+                violated_rule=self.report_data.violated_rule
+            )
+
+            sent_message = await report_channel.send(content=content, embed=embed, view=approval_view)
             await db.update_report_message_id(report_id, sent_message.id)
 
             # 警告を発行する場合（警告チャンネルでのみ実行）
@@ -1062,6 +1071,95 @@ async def whois_error(interaction: discord.Interaction, error: app_commands.AppC
 #         await interaction.response.send_message("このコマンドはサーバーの管理者のみが実行できます。", ephemeral=True)
 #     else:
 #         await interaction.response.send_message(f"報告先チャンネル設定中にエラーが発生しました: {error}", ephemeral=True)
+
+
+# --- 管理人承認ボタン用のView ---
+class ApprovalView(ui.View):
+    """報告を承認・却下するボタン"""
+    def __init__(self, report_id: int, report_embed: discord.Embed, target_user_mention: str, violated_rule: str):
+        super().__init__(timeout=None)  # タイムアウトなし（永続）
+        self.report_id = report_id
+        self.report_embed = report_embed
+        self.target_user_mention = target_user_mention
+        self.violated_rule = violated_rule
+
+    @ui.button(label="✅ 承認して公開", style=discord.ButtonStyle.success)
+    async def approve_report(self, interaction: discord.Interaction, button: ui.Button):
+        """報告を承認して公開チャンネルに投稿"""
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # 公開チャンネルを取得
+            public_channel = client.get_channel(PUBLIC_REPORT_CHANNEL_ID)
+            if not public_channel:
+                await interaction.followup.send("❌ 公開チャンネルが見つかりません。", ephemeral=True)
+                return
+
+            # 公開用のEmbed（報告者情報を除外）
+            public_embed = discord.Embed(
+                title=f"⚠️ 承認された報告 (ID: {self.report_id})",
+                color=discord.Color.red()
+            )
+            public_embed.add_field(name="👤 報告対象者", value=self.target_user_mention, inline=False)
+            public_embed.add_field(name="📜 違反したルール", value=self.violated_rule, inline=False)
+
+            # 元のEmbedから詳細情報をコピー
+            for field in self.report_embed.fields:
+                if field.name in ["📝 詳細", "🔗 関連メッセージ"]:
+                    public_embed.add_field(name=field.name, value=field.value, inline=False)
+
+            public_embed.set_footer(text=f"承認者: {interaction.user.name} | 報告ID: {self.report_id}")
+
+            # 公開チャンネルに投稿
+            await public_channel.send(embed=public_embed)
+
+            # データベースの状態を更新
+            await db.update_report_status(self.report_id, "承認済み")
+
+            # 元のメッセージを更新（ボタンを無効化）
+            for item in self.children:
+                item.disabled = True
+
+            approval_note = discord.Embed(
+                title="✅ この報告は承認されました",
+                description=f"承認者: {interaction.user.mention}\n公開チャンネルに投稿されました。",
+                color=discord.Color.green()
+            )
+
+            await interaction.message.edit(view=self)
+            await interaction.message.reply(embed=approval_note)
+            await interaction.followup.send("✅ 報告を承認し、公開チャンネルに投稿しました。", ephemeral=True)
+
+        except Exception as e:
+            logging.error(f"報告承認中にエラー: {e}", exc_info=True)
+            await interaction.followup.send(f"❌ 承認処理中にエラーが発生しました: {e}", ephemeral=True)
+
+    @ui.button(label="❌ 却下", style=discord.ButtonStyle.danger)
+    async def reject_report(self, interaction: discord.Interaction, button: ui.Button):
+        """報告を却下"""
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # データベースの状態を更新
+            await db.update_report_status(self.report_id, "却下済み")
+
+            # ボタンを無効化
+            for item in self.children:
+                item.disabled = True
+
+            rejection_note = discord.Embed(
+                title="❌ この報告は却下されました",
+                description=f"却下者: {interaction.user.mention}\n公開チャンネルには投稿されません。",
+                color=discord.Color.dark_gray()
+            )
+
+            await interaction.message.edit(view=self)
+            await interaction.message.reply(embed=rejection_note)
+            await interaction.followup.send("✅ 報告を却下しました。", ephemeral=True)
+
+        except Exception as e:
+            logging.error(f"報告却下中にエラー: {e}", exc_info=True)
+            await interaction.followup.send(f"❌ 却下処理中にエラーが発生しました: {e}", ephemeral=True)
 
 
 # --- 起動処理 ---

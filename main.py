@@ -72,7 +72,7 @@ async def setup_report_button():
         # 新しい報告ボタンメッセージのEmbed定義
         new_embed = discord.Embed(
             title="🛡️ 守護神ボット 報告システム",
-            description="サーバーのルール違反を報告できます。\n下のボタンをクリックして報告を開始してください。\n\n⚠️ **テキストチャンネルでの違反のみ対象です。ボイスチャットは対象外です。**",
+            description="サーバーのルール違反や困りごとを報告できます。\n下のボタンをクリックして報告を開始してください。\n\n🎤 **ボイスチャットでの困りごとは「VC困りごとを報告する」をご利用ください。**",
             color=discord.Color.blue()
         )
         new_embed.add_field(
@@ -175,13 +175,93 @@ class ConfirmWarningView(ui.View):
         await interaction.response.edit_message(content="警告の発行をキャンセルしました。", view=None)
         self.stop()
 
+# --- VC困りごと報告用モーダル ---
+class VCReportModal(ui.Modal):
+    """📮 VC困りごと報告フォーム"""
+    def __init__(self):
+        super().__init__(title="📮 VC困りごと報告フォーム")
+
+    when = ui.TextInput(
+        label="いつ",
+        placeholder="日時をざっくり（例：今日の夜8時ごろ）",
+        required=True,
+        max_length=100,
+        style=discord.TextStyle.short
+    )
+
+    where = ui.TextInput(
+        label="どこで",
+        placeholder="一般① / ゲーム部屋 / DM通話 など",
+        required=True,
+        max_length=100,
+        style=discord.TextStyle.short
+    )
+
+    what_happened = ui.TextInput(
+        label="何があった",
+        placeholder="自由記述",
+        required=True,
+        max_length=1000,
+        style=discord.TextStyle.long
+    )
+
+    who_else = ui.TextInput(
+        label="他に誰がいた",
+        placeholder="わかる範囲で（任意）",
+        required=False,
+        max_length=200,
+        style=discord.TextStyle.short
+    )
+
+    desired_response = ui.TextInput(
+        label="希望する対応",
+        placeholder="🔔 注意してほしい / 🚶 距離を置きたい / 👂 聞いてほしいだけ",
+        required=True,
+        max_length=100,
+        style=discord.TextStyle.short
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            report_channel = client.get_channel(ADMIN_ONLY_CHANNEL_ID)
+            if not report_channel:
+                await interaction.followup.send("❌ 報告先チャンネルが見つかりません。管理者に連絡してください。", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title="📮 VC困りごと報告",
+                color=discord.Color.purple()
+            )
+            embed.add_field(name="🗣️ 報告者", value=interaction.user.mention, inline=False)
+            embed.add_field(name="🕐 いつ", value=self.when.value, inline=False)
+            embed.add_field(name="📍 どこで", value=self.where.value, inline=False)
+            embed.add_field(name="💬 何があった", value=self.what_happened.value, inline=False)
+            if self.who_else.value:
+                embed.add_field(name="👥 他に誰がいた", value=self.who_else.value, inline=False)
+            embed.add_field(name="🙏 希望する対応", value=self.desired_response.value, inline=False)
+            embed.set_footer(text="このVC困りごと報告はボタン機能から送信されました")
+
+            await report_channel.send(embed=embed)
+            await interaction.followup.send("✅ VC困りごと報告を送信しました。ご協力ありがとうございます。", ephemeral=True)
+
+        except Exception as e:
+            logging.error(f"VC困りごと報告でエラー: {e}", exc_info=True)
+            await interaction.followup.send(f"❌ 報告の送信中にエラーが発生しました: {e}", ephemeral=True)
+
+
 # --- ボタンベースの報告システム用View ---
 class ReportStartView(ui.View):
     """報告を開始するボタン"""
     def __init__(self):
         super().__init__(timeout=None)  # 永続化
 
-    @ui.button(label="📝 報告を開始する", style=discord.ButtonStyle.primary, emoji="🛡️", custom_id="report_start_button")
+    @ui.button(label="📮 VC困りごとを報告する", style=discord.ButtonStyle.secondary, emoji="🎤", custom_id="vc_report_button", row=0)
+    async def vc_report(self, interaction: discord.Interaction, button: ui.Button):
+        modal = VCReportModal()
+        await interaction.response.send_modal(modal)
+
+    @ui.button(label="📝 報告を開始する", style=discord.ButtonStyle.primary, emoji="🛡️", custom_id="report_start_button", row=1)
     async def start_report(self, interaction: discord.Interaction, button: ui.Button):
         # 最初に即座に応答して、その後でクールダウンチェックを行う
         await interaction.response.defer(ephemeral=True)

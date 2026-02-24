@@ -72,7 +72,7 @@ async def setup_report_button():
         # 新しい報告ボタンメッセージのEmbed定義
         new_embed = discord.Embed(
             title="🛡️ 守護神ボット 報告システム",
-            description="サーバーのルール違反や困りごとを報告できます。\n下のボタンをクリックして報告を開始してください。\n\n🎤 **ボイスチャットでの困りごとは「VC困りごとを報告する」をご利用ください。**",
+            description="サーバーのルール違反や困りごとを報告できます。\n下のボタンをクリックして報告を開始してください。\n\n📝 **通常の報告** → 承認後にサーバー内に共有されます\n🎤 **VC困りごと報告** → 管理者のみに届きます（公開されません）",
             color=discord.Color.blue()
         )
         new_embed.add_field(

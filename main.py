@@ -734,29 +734,25 @@ class FinalConfirmView(ui.View):
         await interaction.response.defer(ephemeral=True)
         
         try:
-            # 報告チャンネルを警告発行の有無で分岐
-            if self.report_data.issue_warning:
-                report_channel = client.get_channel(WARNING_CHANNEL_ID)
-            else:
-                report_channel = client.get_channel(ADMIN_ONLY_CHANNEL_ID)
-            
+            # 報告は常に管理者チャンネルへ（承認後に公開）
+            report_channel = client.get_channel(ADMIN_ONLY_CHANNEL_ID)
+
             if not report_channel:
                 await interaction.followup.send("❌ 報告先チャンネルが見つかりません。管理者に連絡してください。", ephemeral=True)
                 return
 
             report_id = await db.create_report(
-                interaction.guild.id, 
-                self.report_data.target_user.id, 
-                self.report_data.violated_rule, 
-                self.report_data.details, 
-                self.report_data.message_link, 
+                interaction.guild.id,
+                self.report_data.target_user.id,
+                self.report_data.violated_rule,
+                self.report_data.details,
+                self.report_data.message_link,
                 self.report_data.urgency
             )
-            
+
             # 埋め込みの色と絵文字を設定
             embed_color = discord.Color.greyple()
             title_prefix = "📝"
-            content = None
 
             if self.report_data.urgency == "中":
                 embed_color = discord.Color.orange()
@@ -764,64 +760,35 @@ class FinalConfirmView(ui.View):
             elif self.report_data.urgency == "高":
                 embed_color = discord.Color.red()
                 title_prefix = "🚨"
-                # 緊急時のロールメンションは設定から取得（将来的に設定可能にする場合のため）
-                # content = f"@everyone 緊急の報告です！"  # 必要に応じてコメントアウト解除
-            
+
             # 報告種別を表示に追加
-            report_type = "警告付き報告" if self.report_data.issue_warning else "管理者のみ報告"
-            
+            report_type = "警告付き報告（承認後に警告送信）" if self.report_data.issue_warning else "管理者のみ報告"
+
             embed = discord.Embed(title=f"{title_prefix} 新規の報告 (ID: {report_id})", color=embed_color)
             embed.add_field(name="🗣️ 報告者", value=f"{interaction.user.mention}", inline=False)
             embed.add_field(name="👤 報告対象者", value=f"{self.report_data.target_user.mention}", inline=False)
             embed.add_field(name="📜 違反したルール", value=self.report_data.violated_rule, inline=False)
             embed.add_field(name="🔥 緊急度", value=self.report_data.urgency, inline=False)
             embed.add_field(name="📋 報告種別", value=report_type, inline=False)
-            if self.report_data.details: 
+            if self.report_data.details:
                 embed.add_field(name="📝 詳細", value=self.report_data.details, inline=False)
-            if self.report_data.message_link: 
+            if self.report_data.message_link:
                 embed.add_field(name="🔗 関連メッセージ", value=self.report_data.message_link, inline=False)
             embed.set_footer(text="この報告はボタン機能から送信されました")
 
-            # 承認ボタンを追加
+            # 承認ボタンを追加（issue_warning も渡す）
             approval_view = ApprovalView(
                 report_id=report_id,
                 report_embed=embed,
                 target_user_mention=self.report_data.target_user.mention,
-                violated_rule=self.report_data.violated_rule
+                violated_rule=self.report_data.violated_rule,
+                issue_warning=self.report_data.issue_warning
             )
 
-            sent_message = await report_channel.send(content=content, embed=embed, view=approval_view)
+            sent_message = await report_channel.send(embed=embed, view=approval_view)
             await db.update_report_message_id(report_id, sent_message.id)
 
-            # 警告を発行する場合（警告チャンネルでのみ実行）
-            if self.report_data.issue_warning:
-
-                # メンションはコンテンツとして送信（通知用）
-                mention_content = f"{self.report_data.target_user.mention}"
-                
-                # 警告内容はEmbedとして送信（リンクを綺麗に表示するため）
-                warning_embed = discord.Embed(
-                    title="⚠️ サーバー管理者からのお知らせです ⚠️",
-                    description=(
-                        "━━━━━━━━━━━━━━━━━━━━━━\n"
-                        "あなたの行動について、サーバーのルールに関する報告が寄せられました。\n\n"
-                        f"**該当ルール:** {self.report_data.violated_rule}\n"
-                        f"**ルール詳細:** [✅ルールを確認する](https://discord.com/channels/1300291307314610316/1377465336076566578)\n\n"
-                        "みんなが楽しく過ごせるよう、今一度ルールの確認をお願いいたします。\n"
-                        "ご不明な点があれば、このチャンネルで返信するか、管理者にDMを送ってください。\n"
-                        "━━━━━━━━━━━━━━━━━━━━━━"
-                    ),
-                    color=discord.Color.red()
-
-                )
-                
-                await report_channel.send(content=mention_content, embed=warning_embed)
-
-            final_message = "✅ 報告を送信しました。ご協力ありがとうございます。"
-            if self.report_data.issue_warning:
-                final_message = "✅ 報告と警告発行を完了しました。ご協力ありがとうございます。"
-
-            await interaction.followup.send(final_message, ephemeral=True)
+            await interaction.followup.send("✅ 報告を送信しました。管理者が確認後に対応します。", ephemeral=True)
             
             # 報告送信後に報告ボタンを最新位置に移動
             await refresh_report_button()
@@ -1069,12 +1036,13 @@ async def whois_error(interaction: discord.Interaction, error: app_commands.AppC
 # --- 管理人承認ボタン用のView ---
 class ApprovalView(ui.View):
     """報告を承認・却下するボタン"""
-    def __init__(self, report_id: int, report_embed: discord.Embed, target_user_mention: str, violated_rule: str):
+    def __init__(self, report_id: int, report_embed: discord.Embed, target_user_mention: str, violated_rule: str, issue_warning: bool = False):
         super().__init__(timeout=None)  # タイムアウトなし（永続）
         self.report_id = report_id
         self.report_embed = report_embed
         self.target_user_mention = target_user_mention
         self.violated_rule = violated_rule
+        self.issue_warning = issue_warning
 
     @ui.button(label="✅ 承認して公開", style=discord.ButtonStyle.success)
     async def approve_report(self, interaction: discord.Interaction, button: ui.Button):
@@ -1105,6 +1073,23 @@ class ApprovalView(ui.View):
 
             # 公開チャンネルに投稿
             await public_channel.send(embed=public_embed)
+
+            # 警告付き報告の場合、承認後に警告メッセージを送信
+            if self.issue_warning:
+                warning_embed = discord.Embed(
+                    title="⚠️ サーバー管理者からのお知らせです ⚠️",
+                    description=(
+                        "━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "あなたの行動について、サーバーのルールに関する報告が寄せられました。\n\n"
+                        f"**該当ルール:** {self.violated_rule}\n"
+                        f"**ルール詳細:** [✅ルールを確認する]({RULE_ANNOUNCEMENT_LINK})\n\n"
+                        "みんなが楽しく過ごせるよう、今一度ルールの確認をお願いいたします。\n"
+                        "ご不明な点があれば、このチャンネルで返信するか、管理者にDMを送ってください。\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━"
+                    ),
+                    color=discord.Color.red()
+                )
+                await public_channel.send(content=self.target_user_mention, embed=warning_embed)
 
             # データベースの状態を更新
             await db.update_report_status(self.report_id, "承認済み")

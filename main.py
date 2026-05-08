@@ -20,6 +20,7 @@ WARNING_CHANNEL_ID = 1399405974841852116  # 警告発行時の報告先チャン
 ADMIN_ONLY_CHANNEL_ID = 1388167902808637580  # 管理者のみ報告時のチャンネルID
 PUBLIC_REPORT_CHANNEL_ID = 1399405974841852116  # 承認された報告を公開するチャンネルID（変更したい場合はここを修正）
 RULE_ANNOUNCEMENT_LINK = "https://discord.com/channels/1300291307314610316/1377465336076566578"  # ルールアナウンスチャンネルのリンク
+FEEDBACK_CHANNEL_LINK = "https://discord.com/channels/1300291307314610316/1301043991776858113"  # ご意見・ご要望チャンネルのリンク
 
 # --- Discord Botの準備 ---
 intents = discord.Intents.default()
@@ -1084,7 +1085,8 @@ class ApprovalView(ui.View):
                         f"**該当ルール:** {self.violated_rule}\n"
                         f"**ルール詳細:** [✅ルールを確認する]({RULE_ANNOUNCEMENT_LINK})\n\n"
                         "みんなが楽しく過ごせるよう、今一度ルールの確認をお願いいたします。\n"
-                        "ご不明な点があれば、このチャンネルで返信するか、管理者にDMを送ってください。\n"
+                        "ご不明な点やご意見・ご要望がある場合は、以下のチャンネルでお知らせください。\n\n"
+                        f"**[ご意見・ご要望チャンネル]({FEEDBACK_CHANNEL_LINK})**\n"
                         "━━━━━━━━━━━━━━━━━━━━━━"
                     ),
                     color=discord.Color.red()

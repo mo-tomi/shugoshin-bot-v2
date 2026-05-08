@@ -9,12 +9,23 @@ load_dotenv()
 # ### Supabaseデータベース接続用の共通関数 ###
 # Supabaseローカル開発環境のPostgreSQLデータベースに直接接続
 DATABASE_URL = os.environ.get('DATABASE_URL')
+_pool = None
 
 async def get_pool():
     """Supabaseローカル開発環境のPostgreSQLデータベース接続プールを取得"""
+    global _pool
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL environment variable is not set.")
-    return await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
+    if _pool is None:
+        _pool = await asyncpg.create_pool(DATABASE_URL, statement_cache_size=0)
+    return _pool
+
+async def close_pool():
+    """データベース接続プールを閉じる"""
+    global _pool
+    if _pool is not None:
+        await _pool.close()
+        _pool = None
 # #################################
 
 
@@ -168,9 +179,14 @@ async def init_shugoshin_db():
             CREATE TABLE IF NOT EXISTS reports (
                 report_id SERIAL PRIMARY KEY, guild_id BIGINT, message_id BIGINT,
                 target_user_id BIGINT, violated_rule TEXT, details TEXT,
-                message_link TEXT, urgency TEXT, status TEXT DEFAULT '未対応',
+                message_link TEXT, urgency TEXT, issue_warning BOOLEAN NOT NULL DEFAULT FALSE,
+                status TEXT DEFAULT '未対応',
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
+        ''')
+        await connection.execute('''
+            ALTER TABLE reports
+            ADD COLUMN IF NOT EXISTS issue_warning BOOLEAN NOT NULL DEFAULT FALSE;
         ''')
         # サーバー別の設定を保存するテーブル
         await connection.execute('''
@@ -229,13 +245,13 @@ async def check_cooldown(user_id, cooldown_seconds):
             return 0
     
 
-async def create_report(guild_id, target_user_id, violated_rule, details, message_link, urgency):
+async def create_report(guild_id, target_user_id, violated_rule, details, message_link, urgency, issue_warning=False):
     pool = await get_pool()
     async with pool.acquire() as connection:
         report_id = await connection.fetchval(
-            '''INSERT INTO reports (guild_id, target_user_id, violated_rule, details, message_link, urgency) 
-               VALUES ($1, $2, $3, $4, $5, $6) RETURNING report_id''',
-            guild_id, target_user_id, violated_rule, details, message_link, urgency
+            '''INSERT INTO reports (guild_id, target_user_id, violated_rule, details, message_link, urgency, issue_warning)
+               VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING report_id''',
+            guild_id, target_user_id, violated_rule, details, message_link, urgency, issue_warning
         )
     
     return report_id
@@ -264,6 +280,18 @@ async def get_report(report_id):
         record = await connection.fetchrow("SELECT * FROM reports WHERE report_id = $1", report_id)
     
     return record
+
+async def get_pending_approval_reports():
+    pool = await get_pool()
+    async with pool.acquire() as connection:
+        records = await connection.fetch('''
+            SELECT report_id, message_id, target_user_id, violated_rule, details,
+                   message_link, issue_warning
+            FROM reports
+            WHERE status = '未対応' AND message_id IS NOT NULL
+        ''')
+
+    return records
 
 async def list_reports(status_filter=None):
     pool = await get_pool()

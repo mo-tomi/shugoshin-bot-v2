@@ -14,13 +14,23 @@ logging.basicConfig(level=logging.INFO)
 
 # --- 定数 ---
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-COOLDOWN_MINUTES = 1440 # クールダウン時間（分）
-REPORT_BUTTON_CHANNEL_ID = 1399405974841852116  # ボタン式報告専用チャンネルID（変更したい場合はここを修正）
-WARNING_CHANNEL_ID = 1399405974841852116  # 警告発行時の報告先チャンネルID
-ADMIN_ONLY_CHANNEL_ID = 1388167902808637580  # 管理者のみ報告時のチャンネルID
-PUBLIC_REPORT_CHANNEL_ID = 1399405974841852116  # 承認された報告を公開するチャンネルID（変更したい場合はここを修正）
-RULE_ANNOUNCEMENT_LINK = "https://discord.com/channels/1300291307314610316/1377465336076566578"  # ルールアナウンスチャンネルのリンク
-FEEDBACK_CHANNEL_LINK = "https://discord.com/channels/1300291307314610316/1301043991776858113"  # ご意見・ご要望チャンネルのリンク
+
+def get_int_env(name, default):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logging.warning(f"{name} は数値で指定してください。既定値 {default} を使用します。")
+        return default
+
+COOLDOWN_MINUTES = get_int_env("COOLDOWN_MINUTES", 1440) # クールダウン時間（分）
+REPORT_BUTTON_CHANNEL_ID = get_int_env("REPORT_BUTTON_CHANNEL_ID", 1399405974841852116)  # ボタン式報告専用チャンネルID
+ADMIN_ONLY_CHANNEL_ID = get_int_env("ADMIN_ONLY_CHANNEL_ID", 1388167902808637580)  # 管理者のみ報告時のチャンネルID
+PUBLIC_REPORT_CHANNEL_ID = get_int_env("PUBLIC_REPORT_CHANNEL_ID", 1399405974841852116)  # 承認された報告を公開するチャンネルID
+RULE_ANNOUNCEMENT_LINK = os.getenv("RULE_ANNOUNCEMENT_LINK", "https://discord.com/channels/1300291307314610316/1377465336076566578")  # ルールアナウンスチャンネルのリンク
+FEEDBACK_CHANNEL_LINK = os.getenv("FEEDBACK_CHANNEL_LINK", "https://discord.com/channels/1300291307314610316/1301043991776858113")  # ご意見・ご要望チャンネルのリンク
 
 # --- Discord Botの準備 ---
 intents = discord.Intents.default()
@@ -28,6 +38,7 @@ intents.members = True  # サーバーメンバー情報の取得に必要
 intents.guilds = True   # ギルド情報の取得に必要
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+views_registered = False
 
 # --- スリープ対策Webサーバー ---
 app = Flask(__name__)
@@ -42,17 +53,39 @@ def run_flask():
 # --- Botのイベント ---
 @client.event
 async def on_ready():
+    global views_registered
     # Supabaseローカル環境で守護神ボット用テーブルを初期化
     await db.init_shugoshin_db()
     
-    # 永続ビューを追加（ボット再起動後もボタンが動作するように）
-    client.add_view(ReportStartView())
+    if not views_registered:
+        # 永続ビューを追加（ボット再起動後もボタンが動作するように）
+        client.add_view(ReportStartView())
+        await restore_pending_approval_views()
+        views_registered = True
     
     await tree.sync()
     logging.info(f"✅ 守護神ボットが起動しました: {client.user}")
     
     # 報告用ボタンをチャンネルに送信
     await setup_report_button()
+
+async def restore_pending_approval_views():
+    """未対応報告の承認・却下ボタンを再起動後も使えるように復元する"""
+    try:
+        reports = await db.get_pending_approval_reports()
+        for report in reports:
+            view = ApprovalView(
+                report_id=report["report_id"],
+                target_user_mention=f"<@{report['target_user_id']}>",
+                violated_rule=report["violated_rule"],
+                issue_warning=report["issue_warning"],
+                details=report["details"],
+                message_link=report["message_link"],
+            )
+            client.add_view(view, message_id=report["message_id"])
+        logging.info(f"未対応報告の承認ボタンを {len(reports)} 件復元しました")
+    except Exception as e:
+        logging.error(f"承認ボタンの復元に失敗: {e}", exc_info=True)
 
 async def setup_report_button():
     """報告用ボタンを特定のチャンネルに設置する"""
@@ -79,6 +112,11 @@ async def setup_report_button():
         new_embed.add_field(
             name="📋 報告の流れ",
             value="① 報告開始ボタンをクリック\n② 対象者を選択\n③ 違反ルールを選択\n④ 緊急度を選択\n⑤ 詳細情報を入力\n⑥ 最終確認・送信",
+            inline=False
+        )
+        new_embed.add_field(
+            name="🖼️ スクショや画像がある場合",
+            value=f"報告送信後、証拠となるスクショや画像を[ご意見・ご要望チャンネル]({FEEDBACK_CHANNEL_LINK})へ別途送信してください。",
             inline=False
         )
         
@@ -112,6 +150,11 @@ async def create_new_report_button(channel):
     embed.add_field(
         name="📋 報告の流れ",
         value="① 報告開始ボタンをクリック\n② 対象者を選択\n③ 違反ルールを選択\n④ 緊急度を選択\n⑤ 詳細情報を入力\n⑥ 最終確認・送信",
+        inline=False
+    )
+    embed.add_field(
+        name="🖼️ スクショや画像がある場合",
+        value=f"報告送信後、証拠となるスクショや画像を[ご意見・ご要望チャンネル]({FEEDBACK_CHANNEL_LINK})へ別途送信してください。",
         inline=False
     )
     
@@ -248,7 +291,7 @@ class VCReportModal(ui.Modal):
 
         except Exception as e:
             logging.error(f"VC困りごと報告でエラー: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ 報告の送信中にエラーが発生しました: {e}", ephemeral=True)
+            await interaction.followup.send("❌ 報告の送信中にエラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
 
 
 # --- ボタンベースの報告システム用View ---
@@ -522,7 +565,7 @@ class UserInputModal(ui.Modal):
                 
         except Exception as e:
             logging.error(f"ユーザー検索エラー: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ ユーザー検索中にエラーが発生しました: {e}", ephemeral=True)
+            await interaction.followup.send("❌ ユーザー検索中にエラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
 
 class RuleSelectView(ui.View):
     """ルール選択用のView"""
@@ -748,7 +791,8 @@ class FinalConfirmView(ui.View):
                 self.report_data.violated_rule,
                 self.report_data.details,
                 self.report_data.message_link,
-                self.report_data.urgency
+                self.report_data.urgency,
+                self.report_data.issue_warning
             )
 
             # 埋め込みの色と絵文字を設定
@@ -780,10 +824,11 @@ class FinalConfirmView(ui.View):
             # 承認ボタンを追加（issue_warning も渡す）
             approval_view = ApprovalView(
                 report_id=report_id,
-                report_embed=embed,
                 target_user_mention=self.report_data.target_user.mention,
                 violated_rule=self.report_data.violated_rule,
-                issue_warning=self.report_data.issue_warning
+                issue_warning=self.report_data.issue_warning,
+                details=self.report_data.details,
+                message_link=self.report_data.message_link,
             )
 
             sent_message = await report_channel.send(embed=embed, view=approval_view)
@@ -796,7 +841,7 @@ class FinalConfirmView(ui.View):
 
         except Exception as e:
             logging.error(f"ボタン式報告処理中にエラー: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ 報告の送信中にエラーが発生しました: {e}", ephemeral=True)
+            await interaction.followup.send("❌ 報告の送信中にエラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
 
     @ui.button(label="❌ キャンセル", style=discord.ButtonStyle.danger, row=1)
     async def cancel_report(self, interaction: discord.Interaction, button: ui.Button):
@@ -847,14 +892,15 @@ async def whois(interaction: discord.Interaction, user_id: str):
         await interaction.followup.send("❌ そのIDのユーザーは見つかりませんでした。", ephemeral=True)
     except Exception as e:
         logging.error(f"/whois エラー: {e}", exc_info=True)
-        await interaction.followup.send(f"❌ ユーザーを取得できませんでした: {e}", ephemeral=True)
+        await interaction.followup.send("❌ ユーザーを取得できませんでした。IDを確認して再試行してください。", ephemeral=True)
 
 @whois.error
 async def whois_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message("このコマンドはサーバーの**管理者のみ**が実行できます。", ephemeral=True)
     else:
-        await interaction.response.send_message(f"エラーが発生しました: {error}", ephemeral=True)
+        logging.error(f"/whois 権限チェック中にエラー: {error}", exc_info=True)
+        await interaction.response.send_message("エラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
 
 # (/kanrinin グループ - 管理者用報告管理コマンド) - 一時的に非表示
 # report_manage_group = app_commands.Group(name="kanrinin", description="報告を管理します。")
@@ -1037,20 +1083,44 @@ async def whois_error(interaction: discord.Interaction, error: app_commands.AppC
 # --- 管理人承認ボタン用のView ---
 class ApprovalView(ui.View):
     """報告を承認・却下するボタン"""
-    def __init__(self, report_id: int, report_embed: discord.Embed, target_user_mention: str, violated_rule: str, issue_warning: bool = False):
+    def __init__(self, report_id: int, target_user_mention: str, violated_rule: str, issue_warning: bool = False, details: str = None, message_link: str = None):
         super().__init__(timeout=None)  # タイムアウトなし（永続）
         self.report_id = report_id
-        self.report_embed = report_embed
         self.target_user_mention = target_user_mention
         self.violated_rule = violated_rule
         self.issue_warning = issue_warning
+        self.details = details
+        self.message_link = message_link
 
-    @ui.button(label="✅ 承認して公開", style=discord.ButtonStyle.success)
-    async def approve_report(self, interaction: discord.Interaction, button: ui.Button):
+        approve_button = ui.Button(
+            label="✅ 承認して公開",
+            style=discord.ButtonStyle.success,
+            custom_id=f"approve_report:{report_id}",
+        )
+        approve_button.callback = self.approve_report
+        self.add_item(approve_button)
+
+        reject_button = ui.Button(
+            label="❌ 却下",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"reject_report:{report_id}",
+        )
+        reject_button.callback = self.reject_report
+        self.add_item(reject_button)
+
+    async def _is_pending(self):
+        report = await db.get_report(self.report_id)
+        return report and report["status"] == "未対応"
+
+    async def approve_report(self, interaction: discord.Interaction):
         """報告を承認して公開チャンネルに投稿"""
         await interaction.response.defer(ephemeral=True)
 
         try:
+            if not await self._is_pending():
+                await interaction.followup.send("この報告はすでに処理済みです。", ephemeral=True)
+                return
+
             # 公開チャンネルを取得
             public_channel = client.get_channel(PUBLIC_REPORT_CHANNEL_ID)
             if not public_channel:
@@ -1064,11 +1134,10 @@ class ApprovalView(ui.View):
             )
             public_embed.add_field(name="👤 報告対象者", value=self.target_user_mention, inline=False)
             public_embed.add_field(name="📜 違反したルール", value=self.violated_rule, inline=False)
-
-            # 元のEmbedから詳細情報をコピー
-            for field in self.report_embed.fields:
-                if field.name in ["📝 詳細", "🔗 関連メッセージ"]:
-                    public_embed.add_field(name=field.name, value=field.value, inline=False)
+            if self.details:
+                public_embed.add_field(name="📝 詳細", value=self.details, inline=False)
+            if self.message_link:
+                public_embed.add_field(name="🔗 関連メッセージ", value=self.message_link, inline=False)
 
             public_embed.set_footer(text=f"承認者: {interaction.user.name} | 報告ID: {self.report_id}")
 
@@ -1112,14 +1181,17 @@ class ApprovalView(ui.View):
 
         except Exception as e:
             logging.error(f"報告承認中にエラー: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ 承認処理中にエラーが発生しました: {e}", ephemeral=True)
+            await interaction.followup.send("❌ 承認処理中にエラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
 
-    @ui.button(label="❌ 却下", style=discord.ButtonStyle.danger)
-    async def reject_report(self, interaction: discord.Interaction, button: ui.Button):
+    async def reject_report(self, interaction: discord.Interaction):
         """報告を却下"""
         await interaction.response.defer(ephemeral=True)
 
         try:
+            if not await self._is_pending():
+                await interaction.followup.send("この報告はすでに処理済みです。", ephemeral=True)
+                return
+
             # データベースの状態を更新
             await db.update_report_status(self.report_id, "却下済み")
 
@@ -1139,7 +1211,7 @@ class ApprovalView(ui.View):
 
         except Exception as e:
             logging.error(f"報告却下中にエラー: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ 却下処理中にエラーが発生しました: {e}", ephemeral=True)
+            await interaction.followup.send("❌ 却下処理中にエラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
 
 
 # --- 起動処理 ---

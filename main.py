@@ -902,6 +902,46 @@ async def whois_error(interaction: discord.Interaction, error: app_commands.AppC
         logging.error(f"/whois 権限チェック中にエラー: {error}", exc_info=True)
         await interaction.response.send_message("エラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
 
+@tree.command(name="republish", description="承認済みの報告を公開チャンネルに再投稿します（管理者専用）")
+@app_commands.describe(report_id="再投稿したい報告ID")
+@app_commands.checks.has_permissions(administrator=True)
+async def republish_report(interaction: discord.Interaction, report_id: int):
+    """公開先メッセージを削除してしまった場合などに、承認済み報告を再投稿する"""
+    await interaction.response.defer(ephemeral=True)
+    try:
+        report = await db.get_report(report_id)
+        if not report:
+            await interaction.followup.send(f"❌ 報告ID `{report_id}` が見つかりません。", ephemeral=True)
+            return
+        if report["status"] != "承認済み":
+            await interaction.followup.send(
+                f"❌ 再公開できるのは承認済みの報告だけです。現在の状態: `{report['status']}`",
+                ephemeral=True
+            )
+            return
+
+        await publish_report_to_public(
+            report_id=report["report_id"],
+            target_user_mention=f"<@{report['target_user_id']}>",
+            violated_rule=report["violated_rule"],
+            details=report["details"],
+            message_link=report["message_link"],
+            issue_warning=report["issue_warning"],
+            actor_name=interaction.user.name,
+        )
+        await interaction.followup.send(f"✅ 報告ID `{report_id}` を公開チャンネルに再投稿しました。", ephemeral=True)
+    except Exception as e:
+        logging.error(f"報告再公開中にエラー: {e}", exc_info=True)
+        await interaction.followup.send("❌ 再公開中にエラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
+
+@republish_report.error
+async def republish_report_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("このコマンドはサーバーの**管理者のみ**が実行できます。", ephemeral=True)
+    else:
+        logging.error(f"/republish 権限チェック中にエラー: {error}", exc_info=True)
+        await interaction.response.send_message("エラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
+
 # (/kanrinin グループ - 管理者用報告管理コマンド) - 一時的に非表示
 # report_manage_group = app_commands.Group(name="kanrinin", description="報告を管理します。")
 
@@ -1081,6 +1121,44 @@ async def whois_error(interaction: discord.Interaction, error: app_commands.AppC
 
 
 # --- 管理人承認ボタン用のView ---
+async def publish_report_to_public(report_id: int, target_user_mention: str, violated_rule: str, details: str = None, message_link: str = None, issue_warning: bool = False, actor_name: str = "管理者"):
+    """承認済み報告を公開チャンネルに投稿する"""
+    public_channel = client.get_channel(PUBLIC_REPORT_CHANNEL_ID)
+    if not public_channel:
+        raise RuntimeError("公開チャンネルが見つかりません。")
+
+    public_embed = discord.Embed(
+        title=f"⚠️ 承認された報告 (ID: {report_id})",
+        color=discord.Color.red()
+    )
+    public_embed.add_field(name="👤 報告対象者", value=target_user_mention, inline=False)
+    public_embed.add_field(name="📜 違反したルール", value=violated_rule, inline=False)
+    if details:
+        public_embed.add_field(name="📝 詳細", value=details, inline=False)
+    if message_link:
+        public_embed.add_field(name="🔗 関連メッセージ", value=message_link, inline=False)
+
+    public_embed.set_footer(text=f"承認者: {actor_name} | 報告ID: {report_id}")
+    await public_channel.send(embed=public_embed)
+
+    if issue_warning:
+        warning_embed = discord.Embed(
+            title="⚠️ サーバー管理者からのお知らせです ⚠️",
+            description=(
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "あなたの行動について、サーバーのルールに関する報告が寄せられました。\n\n"
+                f"**該当ルール:** {violated_rule}\n"
+                f"**ルール詳細:** [✅ルールを確認する]({RULE_ANNOUNCEMENT_LINK})\n\n"
+                "みんなが楽しく過ごせるよう、今一度ルールの確認をお願いいたします。\n"
+                "ご不明な点やご意見・ご要望がある場合は、以下のチャンネルでお知らせください。\n\n"
+                f"**[ご意見・ご要望チャンネル]({FEEDBACK_CHANNEL_LINK})**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=discord.Color.red()
+        )
+        await public_channel.send(content=target_user_mention, embed=warning_embed)
+
+
 class ApprovalView(ui.View):
     """報告を承認・却下するボタン"""
     def __init__(self, report_id: int, target_user_mention: str, violated_rule: str, issue_warning: bool = False, details: str = None, message_link: str = None):
@@ -1121,46 +1199,15 @@ class ApprovalView(ui.View):
                 await interaction.followup.send("この報告はすでに処理済みです。", ephemeral=True)
                 return
 
-            # 公開チャンネルを取得
-            public_channel = client.get_channel(PUBLIC_REPORT_CHANNEL_ID)
-            if not public_channel:
-                await interaction.followup.send("❌ 公開チャンネルが見つかりません。", ephemeral=True)
-                return
-
-            # 公開用のEmbed（報告者情報を除外）
-            public_embed = discord.Embed(
-                title=f"⚠️ 承認された報告 (ID: {self.report_id})",
-                color=discord.Color.red()
+            await publish_report_to_public(
+                report_id=self.report_id,
+                target_user_mention=self.target_user_mention,
+                violated_rule=self.violated_rule,
+                details=self.details,
+                message_link=self.message_link,
+                issue_warning=self.issue_warning,
+                actor_name=interaction.user.name,
             )
-            public_embed.add_field(name="👤 報告対象者", value=self.target_user_mention, inline=False)
-            public_embed.add_field(name="📜 違反したルール", value=self.violated_rule, inline=False)
-            if self.details:
-                public_embed.add_field(name="📝 詳細", value=self.details, inline=False)
-            if self.message_link:
-                public_embed.add_field(name="🔗 関連メッセージ", value=self.message_link, inline=False)
-
-            public_embed.set_footer(text=f"承認者: {interaction.user.name} | 報告ID: {self.report_id}")
-
-            # 公開チャンネルに投稿
-            await public_channel.send(embed=public_embed)
-
-            # 警告付き報告の場合、承認後に警告メッセージを送信
-            if self.issue_warning:
-                warning_embed = discord.Embed(
-                    title="⚠️ サーバー管理者からのお知らせです ⚠️",
-                    description=(
-                        "━━━━━━━━━━━━━━━━━━━━━━\n"
-                        "あなたの行動について、サーバーのルールに関する報告が寄せられました。\n\n"
-                        f"**該当ルール:** {self.violated_rule}\n"
-                        f"**ルール詳細:** [✅ルールを確認する]({RULE_ANNOUNCEMENT_LINK})\n\n"
-                        "みんなが楽しく過ごせるよう、今一度ルールの確認をお願いいたします。\n"
-                        "ご不明な点やご意見・ご要望がある場合は、以下のチャンネルでお知らせください。\n\n"
-                        f"**[ご意見・ご要望チャンネル]({FEEDBACK_CHANNEL_LINK})**\n"
-                        "━━━━━━━━━━━━━━━━━━━━━━"
-                    ),
-                    color=discord.Color.red()
-                )
-                await public_channel.send(content=self.target_user_mention, embed=warning_embed)
 
             # データベースの状態を更新
             await db.update_report_status(self.report_id, "承認済み")

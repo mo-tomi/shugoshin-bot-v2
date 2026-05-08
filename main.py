@@ -942,6 +942,35 @@ async def republish_report_error(interaction: discord.Interaction, error: app_co
         logging.error(f"/republish 権限チェック中にエラー: {error}", exc_info=True)
         await interaction.response.send_message("エラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
 
+@tree.command(name="sendwarning", description="報告IDを指定して警告メッセージだけを送信します（管理者専用）")
+@app_commands.describe(report_id="警告メッセージを送信したい報告ID")
+@app_commands.checks.has_permissions(administrator=True)
+async def send_warning(interaction: discord.Interaction, report_id: int):
+    """承認済み報告の警告メッセージだけを後から送信する"""
+    await interaction.response.defer(ephemeral=True)
+    try:
+        report = await db.get_report(report_id)
+        if not report:
+            await interaction.followup.send(f"❌ 報告ID `{report_id}` が見つかりません。", ephemeral=True)
+            return
+
+        await send_warning_to_public(
+            target_user_mention=f"<@{report['target_user_id']}>",
+            violated_rule=report["violated_rule"],
+        )
+        await interaction.followup.send(f"✅ 報告ID `{report_id}` の警告メッセージを送信しました。", ephemeral=True)
+    except Exception as e:
+        logging.error(f"警告メッセージ送信中にエラー: {e}", exc_info=True)
+        await interaction.followup.send("❌ 警告メッセージ送信中にエラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
+
+@send_warning.error
+async def send_warning_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("このコマンドはサーバーの**管理者のみ**が実行できます。", ephemeral=True)
+    else:
+        logging.error(f"/sendwarning 権限チェック中にエラー: {error}", exc_info=True)
+        await interaction.response.send_message("エラーが発生しました。時間をおいて再試行してください。", ephemeral=True)
+
 # (/kanrinin グループ - 管理者用報告管理コマンド) - 一時的に非表示
 # report_manage_group = app_commands.Group(name="kanrinin", description="報告を管理します。")
 
@@ -1142,21 +1171,30 @@ async def publish_report_to_public(report_id: int, target_user_mention: str, vio
     await public_channel.send(embed=public_embed)
 
     if issue_warning:
-        warning_embed = discord.Embed(
-            title="⚠️ サーバー管理者からのお知らせです ⚠️",
-            description=(
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "あなたの行動について、サーバーのルールに関する報告が寄せられました。\n\n"
-                f"**該当ルール:** {violated_rule}\n"
-                f"**ルール詳細:** [✅ルールを確認する]({RULE_ANNOUNCEMENT_LINK})\n\n"
-                "みんなが楽しく過ごせるよう、今一度ルールの確認をお願いいたします。\n"
-                "ご不明な点やご意見・ご要望がある場合は、以下のチャンネルでお知らせください。\n\n"
-                f"**[ご意見・ご要望チャンネル]({FEEDBACK_CHANNEL_LINK})**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
-            ),
-            color=discord.Color.red()
-        )
-        await public_channel.send(content=target_user_mention, embed=warning_embed)
+        await send_warning_to_public(target_user_mention, violated_rule)
+
+
+async def send_warning_to_public(target_user_mention: str, violated_rule: str):
+    """対象者に警告メッセージを送信する"""
+    public_channel = client.get_channel(PUBLIC_REPORT_CHANNEL_ID)
+    if not public_channel:
+        raise RuntimeError("公開チャンネルが見つかりません。")
+
+    warning_embed = discord.Embed(
+        title="⚠️ サーバー管理者からのお知らせです ⚠️",
+        description=(
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "あなたの行動について、サーバーのルールに関する報告が寄せられました。\n\n"
+            f"**該当ルール:** {violated_rule}\n"
+            f"**ルール詳細:** [✅ルールを確認する]({RULE_ANNOUNCEMENT_LINK})\n\n"
+            "みんなが楽しく過ごせるよう、今一度ルールの確認をお願いいたします。\n"
+            "ご不明な点やご意見・ご要望がある場合は、以下のチャンネルでお知らせください。\n\n"
+            f"**[ご意見・ご要望チャンネル]({FEEDBACK_CHANNEL_LINK})**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━"
+        ),
+        color=discord.Color.red()
+    )
+    await public_channel.send(content=target_user_mention, embed=warning_embed)
 
 
 class ApprovalView(ui.View):

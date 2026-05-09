@@ -76,7 +76,7 @@ async def restore_pending_approval_views():
         for report in reports:
             view = ApprovalView(
                 report_id=report["report_id"],
-                target_user_mention=f"<@{report['target_user_id']}>",
+                target_user_id=report["target_user_id"],
                 violated_rule=report["violated_rule"],
                 issue_warning=report["issue_warning"],
                 details=report["details"],
@@ -824,7 +824,7 @@ class FinalConfirmView(ui.View):
             # 承認ボタンを追加（issue_warning も渡す）
             approval_view = ApprovalView(
                 report_id=report_id,
-                target_user_mention=self.report_data.target_user.mention,
+                target_user_id=self.report_data.target_user.id,
                 violated_rule=self.report_data.violated_rule,
                 issue_warning=self.report_data.issue_warning,
                 details=self.report_data.details,
@@ -922,7 +922,8 @@ async def republish_report(interaction: discord.Interaction, report_id: int):
 
         await publish_report_to_public(
             report_id=report["report_id"],
-            target_user_mention=f"<@{report['target_user_id']}>",
+            target_user_id=report["target_user_id"],
+            guild=interaction.guild,
             violated_rule=report["violated_rule"],
             details=report["details"],
             message_link=report["message_link"],
@@ -955,7 +956,7 @@ async def send_warning(interaction: discord.Interaction, report_id: int):
             return
 
         await send_warning_to_public(
-            target_user_mention=f"<@{report['target_user_id']}>",
+            target_user_id=report["target_user_id"],
             violated_rule=report["violated_rule"],
         )
         await interaction.followup.send(f"✅ 報告ID `{report_id}` の警告メッセージを送信しました。", ephemeral=True)
@@ -1150,17 +1151,32 @@ async def send_warning_error(interaction: discord.Interaction, error: app_comman
 
 
 # --- 管理人承認ボタン用のView ---
-async def publish_report_to_public(report_id: int, target_user_mention: str, violated_rule: str, details: str = None, message_link: str = None, issue_warning: bool = False, actor_name: str = "管理者"):
+async def format_user_label(user_id: int, guild: discord.Guild = None):
+    """Embed表示用に、数字だけになりにくいユーザー表記を作る"""
+    if guild:
+        member = guild.get_member(user_id)
+        if member:
+            return f"{member.display_name} (`{member.id}`)"
+
+    try:
+        user = await client.fetch_user(user_id)
+        return f"{user.name} (`{user.id}`)"
+    except Exception:
+        return f"ユーザーID `{user_id}`"
+
+
+async def publish_report_to_public(report_id: int, target_user_id: int, guild: discord.Guild, violated_rule: str, details: str = None, message_link: str = None, issue_warning: bool = False, actor_name: str = "管理者"):
     """承認済み報告を公開チャンネルに投稿する"""
     public_channel = client.get_channel(PUBLIC_REPORT_CHANNEL_ID)
     if not public_channel:
         raise RuntimeError("公開チャンネルが見つかりません。")
 
+    target_user_label = await format_user_label(target_user_id, guild)
     public_embed = discord.Embed(
         title=f"⚠️ 承認された報告 (ID: {report_id})",
         color=discord.Color.red()
     )
-    public_embed.add_field(name="👤 報告対象者", value=target_user_mention, inline=False)
+    public_embed.add_field(name="👤 報告対象者", value=target_user_label, inline=False)
     public_embed.add_field(name="📜 違反したルール", value=violated_rule, inline=False)
     if details:
         public_embed.add_field(name="📝 詳細", value=details, inline=False)
@@ -1171,10 +1187,10 @@ async def publish_report_to_public(report_id: int, target_user_mention: str, vio
     await public_channel.send(embed=public_embed)
 
     if issue_warning:
-        await send_warning_to_public(target_user_mention, violated_rule)
+        await send_warning_to_public(target_user_id, violated_rule)
 
 
-async def send_warning_to_public(target_user_mention: str, violated_rule: str):
+async def send_warning_to_public(target_user_id: int, violated_rule: str):
     """対象者に警告メッセージを送信する"""
     public_channel = client.get_channel(PUBLIC_REPORT_CHANNEL_ID)
     if not public_channel:
@@ -1194,15 +1210,15 @@ async def send_warning_to_public(target_user_mention: str, violated_rule: str):
         ),
         color=discord.Color.red()
     )
-    await public_channel.send(content=target_user_mention, embed=warning_embed)
+    await public_channel.send(content=f"<@{target_user_id}>", embed=warning_embed)
 
 
 class ApprovalView(ui.View):
     """報告を承認・却下するボタン"""
-    def __init__(self, report_id: int, target_user_mention: str, violated_rule: str, issue_warning: bool = False, details: str = None, message_link: str = None):
+    def __init__(self, report_id: int, target_user_id: int, violated_rule: str, issue_warning: bool = False, details: str = None, message_link: str = None):
         super().__init__(timeout=None)  # タイムアウトなし（永続）
         self.report_id = report_id
-        self.target_user_mention = target_user_mention
+        self.target_user_id = target_user_id
         self.violated_rule = violated_rule
         self.issue_warning = issue_warning
         self.details = details
@@ -1239,7 +1255,8 @@ class ApprovalView(ui.View):
 
             await publish_report_to_public(
                 report_id=self.report_id,
-                target_user_mention=self.target_user_mention,
+                target_user_id=self.target_user_id,
+                guild=interaction.guild,
                 violated_rule=self.violated_rule,
                 details=self.details,
                 message_link=self.message_link,
